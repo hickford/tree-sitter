@@ -21,7 +21,7 @@ extern "C" {
  * The Tree-sitter library is generally backwards-compatible with languages
  * generated using older CLI versions, but is not forwards-compatible.
  */
-#define TREE_SITTER_LANGUAGE_VERSION 13
+#define TREE_SITTER_LANGUAGE_VERSION 14
 
 /**
  * The earliest ABI version that is supported by the current version of the
@@ -105,6 +105,14 @@ typedef struct {
   TSNode node;
   uint32_t index;
 } TSQueryCapture;
+
+typedef enum {
+  TSQuantifierZero = 0, // must match the array initialization value
+  TSQuantifierZeroOrOne,
+  TSQuantifierZeroOrMore,
+  TSQuantifierOne,
+  TSQuantifierOneOrMore,
+} TSQuantifier;
 
 typedef struct {
   uint32_t id;
@@ -359,9 +367,26 @@ void ts_tree_delete(TSTree *self);
 TSNode ts_tree_root_node(const TSTree *self);
 
 /**
+ * Get the root node of the syntax tree, but with its position
+ * shifted forward by the given offset.
+ */
+TSNode ts_tree_root_node_with_offset(
+  const TSTree *self,
+  uint32_t offset_bytes,
+  TSPoint offset_point
+);
+
+/**
  * Get the language that was used to parse the syntax tree.
  */
 const TSLanguage *ts_tree_language(const TSTree *);
+
+/**
+ * Get the array of included ranges that was used to parse the syntax tree.
+ *
+ * The returned pointer must be freed by the caller.
+ */
+TSRange *ts_tree_included_ranges(const TSTree *, uint32_t *length);
 
 /**
  * Edit the syntax tree to keep it in sync with source code that has been
@@ -395,7 +420,7 @@ TSRange *ts_tree_get_changed_ranges(
 /**
  * Write a DOT graph describing the syntax tree to the given file.
  */
-void ts_tree_print_dot_graph(const TSTree *, FILE *);
+void ts_tree_print_dot_graph(const TSTree *, int file_descriptor);
 
 /******************/
 /* Section - Node */
@@ -725,10 +750,26 @@ const TSQueryPredicateStep *ts_query_predicates_for_pattern(
   uint32_t *length
 );
 
-bool ts_query_is_pattern_guaranteed_at_step(
-  const TSQuery *self,
-  uint32_t byte_offset
-);
+/*
+ * Check if the given pattern in the query has a single root node.
+ */
+bool ts_query_is_pattern_rooted(const TSQuery *self, uint32_t pattern_index);
+
+/*
+ * Check if the given pattern in the query is 'non local'.
+ *
+ * A non-local pattern has multiple root nodes and can match within a
+ * repeating sequence of nodes, as specified by the grammar. Non-local
+ * patterns disable certain optimizations that would otherwise be possible
+ * when executing a query on a specific range of a syntax tree.
+ */
+bool ts_query_is_pattern_non_local(const TSQuery *self, uint32_t pattern_index);
+
+/*
+ * Check if a given pattern is guaranteed to match once a given step is reached.
+ * The step is specified by its byte offset in the query's source code.
+ */
+bool ts_query_is_pattern_guaranteed_at_step(const TSQuery *self, uint32_t byte_offset);
 
 /**
  * Get the name and length of one of the query's captures, or one of the
@@ -740,6 +781,17 @@ const char *ts_query_capture_name_for_id(
   uint32_t id,
   uint32_t *length
 );
+
+/**
+ * Get the quantifier of the query's captures. Each capture is * associated
+ * with a numeric id based on the order that it appeared in the query's source.
+ */
+TSQuantifier ts_query_capture_quantifier_for_id(
+  const TSQuery *,
+  uint32_t pattern_id,
+  uint32_t capture_id
+);
+
 const char *ts_query_string_value_for_id(
   const TSQuery *,
   uint32_t id,
@@ -839,6 +891,16 @@ bool ts_query_cursor_next_capture(
   TSQueryMatch *match,
   uint32_t *capture_index
 );
+
+/**
+ * Set the maximum start depth for a cursor.
+ *
+ * This prevents cursors from exploring children nodes at a certain depth.
+ * Note if a pattern includes many children, then they will still be checked.
+ *
+ * Set to `0` to remove the maximum start depth.
+ */
+void ts_query_cursor_set_max_start_depth(TSQueryCursor *, uint32_t);
 
 /**********************/
 /* Section - Language */

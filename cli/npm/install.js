@@ -2,28 +2,46 @@
 
 const fs = require('fs');
 const zlib = require('zlib');
+const http = require('http');
 const https = require('https');
 const packageJSON = require('./package.json');
 
-// Determine the URL of the file.
-const platformName = {
-  'darwin': 'macos',
-  'linux': 'linux',
-  'win32': 'windows'
-}[process.platform];
-
-let archName = {
-  'x64': 'x64',
-  'x86': 'x86',
-  'ia32': 'x86'
-}[process.arch];
-
-// ARM macs can run x64 binaries via Rosetta. Rely on that for now.
-if (platformName === 'macos' && process.arch === 'arm64') {
-  archName = 'x64';
+// Look to a results table in https://github.com/tree-sitter/tree-sitter/issues/2196
+const matrix = {
+  platform: {
+    'darwin': {
+      name: 'macos',
+      arch: {
+        'arm64': { name: 'arm64' },
+        'x64': { name: 'x64' },
+      }
+    },
+    'linux': {
+      name: 'linux',
+      arch: {
+        'arm64': { name: 'arm64' },
+        'arm': { name: 'arm' },
+        'x64': { name: 'x64' },
+        'x86': { name: 'x86' },
+      }
+    },
+    'win32': {
+      name: 'windows',
+      arch: {
+        'arm64': { name: 'arm64' },
+        'x64': { name: 'x64' },
+        'x86': { name: 'x86' },
+        'ia32': { name: 'x86' },
+      }
+    },
+  },
 }
 
-if (!platformName || !archName) {
+// Determine the URL of the file.
+const platform = matrix.platform[process.platform];
+const arch = platform && platform.arch[process.arch];
+
+if (!platform || !platform.name || !arch || !arch.name) {
   console.error(
     `Cannot install tree-sitter-cli for platform ${process.platform}, architecture ${process.arch}`
   );
@@ -31,7 +49,7 @@ if (!platformName || !archName) {
 }
 
 const releaseURL = `https://github.com/tree-sitter/tree-sitter/releases/download/v${packageJSON.version}`;
-const assetName = `tree-sitter-${platformName}-${archName}.gz`;
+const assetName = `tree-sitter-${platform.name}-${arch.name}.gz`;
 const assetURL = `${releaseURL}/${assetName}`;
 
 // Remove previously-downloaded files.
@@ -64,7 +82,25 @@ file.on('finish', () => {
 
 // Follow redirects.
 function get(url, callback) {
-  https.get(url, response => {
+  const requestUrl = new URL(url)
+  let request = https
+  let requestConfig = requestUrl
+  const proxyEnv = process.env['HTTPS_PROXY'] || process.env['https_proxy']
+
+  if (proxyEnv) {
+    const proxyUrl = new URL(proxyEnv)
+    request = proxyUrl.protocol === 'https:' ? https : http
+    requestConfig = {
+      hostname: proxyUrl.hostname,
+      port: proxyUrl.port,
+      path: requestUrl.toString(),
+      headers: {
+        Host: requestUrl.hostname
+      }
+    }
+  }
+
+  request.get(requestConfig, response => {
     if (response.statusCode === 301 || response.statusCode === 302) {
       get(response.headers.location, callback);
     } else {

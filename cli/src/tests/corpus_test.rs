@@ -2,9 +2,11 @@ use super::helpers::{
     allocations,
     edits::{get_random_edit, invert_edit},
     fixtures::{fixtures_dir, get_language, get_test_language},
+    new_seed,
     random::Rand,
     scope_sequence::ScopeSequence,
-    EXAMPLE_FILTER, LANGUAGE_FILTER, LOG_ENABLED, LOG_GRAPH_ENABLED, SEED, TRIAL_FILTER,
+    EDIT_COUNT, EXAMPLE_FILTER, ITERATION_COUNT, LANGUAGE_FILTER, LOG_ENABLED, LOG_GRAPH_ENABLED,
+    START_SEED,
 };
 use crate::{
     generate,
@@ -12,217 +14,218 @@ use crate::{
     test::{parse_tests, print_diff, print_diff_key, strip_sexp_fields, TestEntry},
     util,
 };
-use std::fs;
-use tree_sitter::{LogType, Node, Parser, Tree};
+use proc_macro::test_with_seed;
+use std::{env, fs};
+use tree_sitter::{LogType, Node, Parser, Point, Range, Tree};
 
-const EDIT_COUNT: usize = 3;
-const TRIAL_COUNT: usize = 10;
-
-#[test]
-fn test_bash_corpus() {
-    test_language_corpus("bash");
+#[test_with_seed(retry=10, seed=*START_SEED, seed_fn=new_seed)]
+fn test_corpus_for_bash(seed: usize) {
+    test_language_corpus(seed, "bash");
 }
 
-#[test]
-fn test_c_corpus() {
-    test_language_corpus("c");
+#[test_with_seed(retry=10, seed=*START_SEED, seed_fn=new_seed)]
+fn test_corpus_for_c(seed: usize) {
+    test_language_corpus(seed, "c");
 }
 
-#[test]
-fn test_cpp_corpus() {
-    test_language_corpus("cpp");
+#[test_with_seed(retry=10, seed=*START_SEED, seed_fn=new_seed)]
+fn test_corpus_for_cpp(seed: usize) {
+    test_language_corpus(seed, "cpp");
 }
 
-#[test]
-fn test_embedded_template_corpus() {
-    test_language_corpus("embedded-template");
+#[test_with_seed(retry=10, seed=*START_SEED, seed_fn=new_seed)]
+fn test_corpus_for_embedded_template(seed: usize) {
+    test_language_corpus(seed, "embedded-template");
 }
 
-#[test]
-fn test_go_corpus() {
-    test_language_corpus("go");
+#[test_with_seed(retry=10, seed=*START_SEED, seed_fn=new_seed)]
+fn test_corpus_for_go(seed: usize) {
+    test_language_corpus(seed, "go");
 }
 
-#[test]
-fn test_html_corpus() {
-    test_language_corpus("html");
+#[test_with_seed(retry=10, seed=*START_SEED, seed_fn=new_seed)]
+fn test_corpus_for_html(seed: usize) {
+    test_language_corpus(seed, "html");
 }
 
-#[test]
-fn test_javascript_corpus() {
-    test_language_corpus("javascript");
+#[test_with_seed(retry=10, seed=*START_SEED, seed_fn=new_seed)]
+fn test_corpus_for_javascript(seed: usize) {
+    test_language_corpus(seed, "javascript");
 }
 
-#[test]
-fn test_json_corpus() {
-    test_language_corpus("json");
+#[test_with_seed(retry=10, seed=*START_SEED, seed_fn=new_seed)]
+fn test_corpus_for_json(seed: usize) {
+    test_language_corpus(seed, "json");
 }
 
-#[test]
-fn test_php_corpus() {
-    test_language_corpus("php");
+#[test_with_seed(retry=10, seed=*START_SEED, seed_fn=new_seed)]
+fn test_corpus_for_php(seed: usize) {
+    test_language_corpus(seed, "php");
 }
 
-#[test]
-fn test_python_corpus() {
-    test_language_corpus("python");
+#[test_with_seed(retry=10, seed=*START_SEED, seed_fn=new_seed)]
+fn test_corpus_for_python(seed: usize) {
+    test_language_corpus(seed, "python");
 }
 
-#[test]
-fn test_ruby_corpus() {
-    test_language_corpus("ruby");
+#[test_with_seed(retry=10, seed=*START_SEED, seed_fn=new_seed)]
+fn test_corpus_for_ruby(seed: usize) {
+    test_language_corpus(seed, "ruby");
 }
 
-#[test]
-fn test_rust_corpus() {
-    test_language_corpus("rust");
+#[test_with_seed(retry=10, seed=*START_SEED, seed_fn=new_seed)]
+fn test_corpus_for_rust(seed: usize) {
+    test_language_corpus(seed, "rust");
 }
 
-fn test_language_corpus(language_name: &str) {
-    if let Some(language_filter) = LANGUAGE_FILTER.as_ref() {
-        if language_filter != language_name {
-            return;
-        }
-    }
-
+fn test_language_corpus(start_seed: usize, language_name: &str) {
     let grammars_dir = fixtures_dir().join("grammars");
     let error_corpus_dir = fixtures_dir().join("error_corpus");
-
-    let mut failure_count = 0;
-
-    let language = get_language(language_name);
+    let template_corpus_dir = fixtures_dir().join("template_corpus");
     let mut corpus_dir = grammars_dir.join(language_name).join("corpus");
     if !corpus_dir.is_dir() {
         corpus_dir = grammars_dir.join(language_name).join("test").join("corpus");
     }
 
     let error_corpus_file = error_corpus_dir.join(&format!("{}_errors.txt", language_name));
+    let template_corpus_file =
+        template_corpus_dir.join(&format!("{}_templates.txt", language_name));
     let main_tests = parse_tests(&corpus_dir).unwrap();
     let error_tests = parse_tests(&error_corpus_file).unwrap_or(TestEntry::default());
+    let template_tests = parse_tests(&template_corpus_file).unwrap_or(TestEntry::default());
     let mut tests = flatten_tests(main_tests);
     tests.extend(flatten_tests(error_tests));
+    tests.extend(flatten_tests(template_tests).into_iter().map(|mut t| {
+        t.template_delimiters = Some(("<%", "%>"));
+        t
+    }));
 
-    for (example_name, input, expected_output, has_fields) in tests {
-        println!("  {} example - {}", language_name, example_name);
+    let language = get_language(language_name);
+    let mut failure_count = 0;
 
-        let trial = 0;
-        if TRIAL_FILTER.map_or(true, |t| t == trial) {
-            let passed = allocations::record(|| {
-                let mut log_session = None;
-                let mut parser = get_parser(&mut log_session, "log.html");
-                parser.set_language(language).unwrap();
-                let tree = parser.parse(&input, None).unwrap();
-                let mut actual_output = tree.root_node().to_sexp();
-                if !has_fields {
-                    actual_output = strip_sexp_fields(actual_output);
-                }
-                if actual_output == expected_output {
-                    true
-                } else {
-                    println!(
-                        "Incorrect initial parse for {} - {}",
-                        language_name, example_name,
-                    );
-                    print_diff_key();
-                    print_diff(&actual_output, &expected_output);
-                    println!("");
-                    false
-                }
-            });
+    let log_seed = env::var("TREE_SITTER_LOG_SEED").is_ok();
 
-            if !passed {
-                failure_count += 1;
-                continue;
+    println!();
+    for test in tests {
+        println!("  {} example - {}", language_name, test.name);
+
+        let passed = allocations::record(|| {
+            let mut log_session = None;
+            let mut parser = get_parser(&mut log_session, "log.html");
+            parser.set_language(language).unwrap();
+            set_included_ranges(&mut parser, &test.input, test.template_delimiters);
+
+            let tree = parser.parse(&test.input, None).unwrap();
+            let mut actual_output = tree.root_node().to_sexp();
+            if !test.has_fields {
+                actual_output = strip_sexp_fields(actual_output);
             }
+
+            if actual_output != test.output {
+                println!(
+                    "Incorrect initial parse for {} - {}",
+                    language_name, test.name,
+                );
+                print_diff_key();
+                print_diff(&actual_output, &test.output);
+                println!("");
+                return false;
+            }
+
+            true
+        });
+
+        if !passed {
+            failure_count += 1;
+            continue;
         }
 
         let mut parser = Parser::new();
         parser.set_language(language).unwrap();
-        let tree = parser.parse(&input, None).unwrap();
+        let tree = parser.parse(&test.input, None).unwrap();
         drop(parser);
 
-        for trial in 1..=TRIAL_COUNT {
-            if TRIAL_FILTER.map_or(true, |filter| filter == trial) {
-                let mut rand = Rand::new(*SEED + trial);
+        for trial in 0..*ITERATION_COUNT {
+            let seed = start_seed + trial;
+            let passed = allocations::record(|| {
+                let mut rand = Rand::new(seed);
+                let mut log_session = None;
+                let mut parser = get_parser(&mut log_session, "log.html");
+                parser.set_language(language).unwrap();
+                let mut tree = tree.clone();
+                let mut input = test.input.clone();
 
-                let passed = allocations::record(|| {
-                    let mut log_session = None;
-                    let mut parser = get_parser(&mut log_session, "log.html");
-                    parser.set_language(language).unwrap();
-                    let mut tree = tree.clone();
-                    let mut input = input.clone();
-
-                    if *LOG_GRAPH_ENABLED {
-                        eprintln!("{}\n", String::from_utf8_lossy(&input));
-                    }
-
-                    // Perform a random series of edits and reparse.
-                    let mut undo_stack = Vec::new();
-                    for _ in 0..EDIT_COUNT {
-                        let edit = get_random_edit(&mut rand, &input);
-                        undo_stack.push(invert_edit(&input, &edit));
-                        perform_edit(&mut tree, &mut input, &edit);
-                    }
-                    if *LOG_GRAPH_ENABLED {
-                        eprintln!("{}\n", String::from_utf8_lossy(&input));
-                    }
-
-                    let mut tree2 = parser.parse(&input, Some(&tree)).unwrap();
-
-                    // Check that the new tree is consistent.
-                    check_consistent_sizes(&tree2, &input);
-                    if let Err(message) = check_changed_ranges(&tree, &tree2, &input) {
-                        println!(
-                            "\nUnexpected scope change in trial {}\n{}\n\n",
-                            trial, message
-                        );
-                        return false;
-                    }
-
-                    // Undo all of the edits and re-parse again.
-                    while let Some(edit) = undo_stack.pop() {
-                        perform_edit(&mut tree2, &mut input, &edit);
-                    }
-                    if *LOG_GRAPH_ENABLED {
-                        eprintln!("{}\n", String::from_utf8_lossy(&input));
-                    }
-
-                    let tree3 = parser.parse(&input, Some(&tree2)).unwrap();
-
-                    // Verify that the final tree matches the expectation from the corpus.
-                    let mut actual_output = tree3.root_node().to_sexp();
-                    if !has_fields {
-                        actual_output = strip_sexp_fields(actual_output);
-                    }
-
-                    if actual_output != expected_output {
-                        println!(
-                            "Incorrect parse for {} - {} - trial {}",
-                            language_name, example_name, trial
-                        );
-                        print_diff_key();
-                        print_diff(&actual_output, &expected_output);
-                        println!("");
-                        return false;
-                    }
-
-                    // Check that the edited tree is consistent.
-                    check_consistent_sizes(&tree3, &input);
-                    if let Err(message) = check_changed_ranges(&tree2, &tree3, &input) {
-                        eprintln!(
-                            "Unexpected scope change in trial {}\n{}\n\n",
-                            trial, message
-                        );
-                        return false;
-                    }
-
-                    true
-                });
-
-                if !passed {
-                    failure_count += 1;
-                    break;
+                if *LOG_GRAPH_ENABLED {
+                    eprintln!("{}\n", String::from_utf8_lossy(&input));
                 }
+
+                // Perform a random series of edits and reparse.
+                let mut undo_stack = Vec::new();
+                for _ in 0..1 + rand.unsigned(*EDIT_COUNT) {
+                    let edit = get_random_edit(&mut rand, &input);
+                    undo_stack.push(invert_edit(&input, &edit));
+                    perform_edit(&mut tree, &mut input, &edit);
+                }
+
+                if log_seed {
+                    println!("    seed: {}", seed);
+                }
+
+                if *LOG_GRAPH_ENABLED {
+                    eprintln!("{}\n", String::from_utf8_lossy(&input));
+                }
+
+                set_included_ranges(&mut parser, &input, test.template_delimiters);
+                let mut tree2 = parser.parse(&input, Some(&tree)).unwrap();
+
+                // Check that the new tree is consistent.
+                check_consistent_sizes(&tree2, &input);
+                if let Err(message) = check_changed_ranges(&tree, &tree2, &input) {
+                    println!("\nUnexpected scope change in seed {seed} with start seed {start_seed}\n{message}\n\n",);
+                    return false;
+                }
+
+                // Undo all of the edits and re-parse again.
+                while let Some(edit) = undo_stack.pop() {
+                    perform_edit(&mut tree2, &mut input, &edit);
+                }
+                if *LOG_GRAPH_ENABLED {
+                    eprintln!("{}\n", String::from_utf8_lossy(&input));
+                }
+
+                set_included_ranges(&mut parser, &test.input, test.template_delimiters);
+                let tree3 = parser.parse(&input, Some(&tree2)).unwrap();
+
+                // Verify that the final tree matches the expectation from the corpus.
+                let mut actual_output = tree3.root_node().to_sexp();
+                if !test.has_fields {
+                    actual_output = strip_sexp_fields(actual_output);
+                }
+
+                if actual_output != test.output {
+                    println!(
+                        "Incorrect parse for {} - {} - seed {}",
+                        language_name, test.name, seed
+                    );
+                    print_diff_key();
+                    print_diff(&actual_output, &test.output);
+                    println!("");
+                    return false;
+                }
+
+                // Check that the edited tree is consistent.
+                check_consistent_sizes(&tree3, &input);
+                if let Err(message) = check_changed_ranges(&tree2, &tree3, &input) {
+                    println!("Unexpected scope change in seed {seed} with start seed {start_seed}\n{message}\n\n");
+                    return false;
+                }
+
+                true
+            });
+
+            if !passed {
+                failure_count += 1;
+                break;
             }
         }
     }
@@ -306,23 +309,23 @@ fn test_feature_corpus_files() {
                 eprintln!("test language: {:?}", language_name);
             }
 
-            for (name, input, expected_output, has_fields) in tests {
-                eprintln!("  example: {:?}", name);
+            for test in tests {
+                eprintln!("  example: {:?}", test.name);
 
                 let passed = allocations::record(|| {
                     let mut log_session = None;
                     let mut parser = get_parser(&mut log_session, "log.html");
                     parser.set_language(language).unwrap();
-                    let tree = parser.parse(&input, None).unwrap();
+                    let tree = parser.parse(&test.input, None).unwrap();
                     let mut actual_output = tree.root_node().to_sexp();
-                    if !has_fields {
+                    if !test.has_fields {
                         actual_output = strip_sexp_fields(actual_output);
                     }
-                    if actual_output == expected_output {
+                    if actual_output == test.output {
                         true
                     } else {
                         print_diff_key();
-                        print_diff(&actual_output, &expected_output);
+                        print_diff(&actual_output, &test.output);
                         println!("");
                         false
                     }
@@ -397,10 +400,67 @@ fn check_consistent_sizes(tree: &Tree, input: &Vec<u8>) {
 }
 
 fn check_changed_ranges(old_tree: &Tree, new_tree: &Tree, input: &Vec<u8>) -> Result<(), String> {
-    let changed_ranges = old_tree.changed_ranges(new_tree).collect();
+    let changed_ranges = old_tree.changed_ranges(new_tree).collect::<Vec<_>>();
     let old_scope_sequence = ScopeSequence::new(old_tree);
     let new_scope_sequence = ScopeSequence::new(new_tree);
+
+    let old_range = old_tree.root_node().range();
+    let new_range = new_tree.root_node().range();
+
+    let byte_range =
+        old_range.start_byte.min(new_range.start_byte)..old_range.end_byte.max(new_range.end_byte);
+    let point_range = old_range.start_point.min(new_range.start_point)
+        ..old_range.end_point.max(new_range.end_point);
+
+    for range in &changed_ranges {
+        if range.end_byte > byte_range.end || range.end_point > point_range.end {
+            return Err(format!(
+                "changed range extends outside of the old and new trees {:?}",
+                range
+            ));
+        }
+    }
+
     old_scope_sequence.check_changes(&new_scope_sequence, &input, &changed_ranges)
+}
+
+fn set_included_ranges(parser: &mut Parser, input: &[u8], delimiters: Option<(&str, &str)>) {
+    if let Some((start, end)) = delimiters {
+        let mut ranges = Vec::new();
+        let mut ix = 0;
+        while ix < input.len() {
+            let Some(mut start_ix) = input[ix..].windows(2).position(|win| win == start.as_bytes()) else { break };
+            start_ix += ix + start.len();
+            let end_ix = input[start_ix..]
+                .windows(2)
+                .position(|win| win == end.as_bytes())
+                .map_or(input.len(), |ix| start_ix + ix);
+            ix = end_ix;
+            ranges.push(Range {
+                start_byte: start_ix,
+                end_byte: end_ix,
+                start_point: point_for_offset(input, start_ix),
+                end_point: point_for_offset(input, end_ix),
+            });
+        }
+
+        parser.set_included_ranges(&ranges).unwrap();
+    } else {
+        parser.set_included_ranges(&[]).unwrap();
+    }
+}
+
+fn point_for_offset(text: &[u8], offset: usize) -> Point {
+    let mut point = Point::default();
+    for byte in &text[..offset] {
+        if *byte == b'\n' {
+            point.row += 1;
+            point.column = 0;
+        } else {
+            point.column += 1;
+        }
+    }
+    point
 }
 
 fn get_parser(session: &mut Option<util::LogSession>, log_filename: &str) -> Parser {
@@ -421,13 +481,16 @@ fn get_parser(session: &mut Option<util::LogSession>, log_filename: &str) -> Par
     parser
 }
 
-fn flatten_tests(test: TestEntry) -> Vec<(String, Vec<u8>, String, bool)> {
-    fn helper(
-        test: TestEntry,
-        is_root: bool,
-        prefix: &str,
-        result: &mut Vec<(String, Vec<u8>, String, bool)>,
-    ) {
+struct FlattenedTest {
+    name: String,
+    input: Vec<u8>,
+    output: String,
+    has_fields: bool,
+    template_delimiters: Option<(&'static str, &'static str)>,
+}
+
+fn flatten_tests(test: TestEntry) -> Vec<FlattenedTest> {
+    fn helper(test: TestEntry, is_root: bool, prefix: &str, result: &mut Vec<FlattenedTest>) {
         match test {
             TestEntry::Example {
                 mut name,
@@ -444,7 +507,13 @@ fn flatten_tests(test: TestEntry) -> Vec<(String, Vec<u8>, String, bool)> {
                         return;
                     }
                 }
-                result.push((name, input, output, has_fields));
+                result.push(FlattenedTest {
+                    name,
+                    input,
+                    output,
+                    has_fields,
+                    template_delimiters: None,
+                });
             }
             TestEntry::Group {
                 mut name, children, ..

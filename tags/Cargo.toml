@@ -1,7 +1,7 @@
 [package]
 name = "tree-sitter-tags"
 description = "Library for extracting tag information"
-version = "0.20.1"
+version = "0.20.2"
 authors = [
   "Max Brunsfeld <maxbrunsfeld@gmail.com>",
   "Patrick Thomson <patrickt@github.com>",
@@ -12,6 +12,7 @@ edition = "2018"
 keywords = ["incremental", "parsing", "syntax", "tagging"]
 categories = ["parsing", "text-editors"]
 repository = "https://github.com/tree-sitter/tree-sitter"
+rust-version.workspace = true
 
 [lib]
 crate-type = ["lib", "staticlib"]

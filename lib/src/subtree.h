@@ -125,6 +125,7 @@ typedef struct {
   bool fragile_right : 1;
   bool has_changes : 1;
   bool has_external_tokens : 1;
+  bool has_external_scanner_state_change : 1;
   bool depends_on_column: 1;
   bool is_missing : 1;
   bool is_keyword : 1;
@@ -135,8 +136,8 @@ typedef struct {
       uint32_t visible_child_count;
       uint32_t named_child_count;
       uint32_t node_count;
-      uint32_t repeat_depth;
       int32_t dynamic_precedence;
+      uint16_t repeat_depth;
       uint16_t production_id;
       struct {
         TSSymbol symbol;
@@ -174,6 +175,8 @@ typedef struct {
 
 void ts_external_scanner_state_init(ExternalScannerState *, const char *, unsigned);
 const char *ts_external_scanner_state_data(const ExternalScannerState *);
+bool ts_external_scanner_state_eq(const ExternalScannerState *a, const char *, unsigned);
+void ts_external_scanner_state_delete(ExternalScannerState *self);
 
 void ts_subtree_array_copy(SubtreeArray, SubtreeArray *);
 void ts_subtree_array_clear(SubtreePool *, SubtreeArray *);
@@ -193,11 +196,10 @@ Subtree ts_subtree_new_error(
 );
 MutableSubtree ts_subtree_new_node(TSSymbol, SubtreeArray *, unsigned, const TSLanguage *);
 Subtree ts_subtree_new_error_node(SubtreeArray *, bool, const TSLanguage *);
-Subtree ts_subtree_new_missing_leaf(SubtreePool *, TSSymbol, Length, const TSLanguage *);
+Subtree ts_subtree_new_missing_leaf(SubtreePool *, TSSymbol, Length, uint32_t, const TSLanguage *);
 MutableSubtree ts_subtree_make_mut(SubtreePool *, Subtree);
 void ts_subtree_retain(Subtree);
 void ts_subtree_release(SubtreePool *, Subtree);
-bool ts_subtree_eq(Subtree, Subtree);
 int ts_subtree_compare(Subtree, Subtree);
 void ts_subtree_set_symbol(MutableSubtree *, TSSymbol, const TSLanguage *);
 void ts_subtree_summarize(MutableSubtree, const Subtree *, uint32_t, const TSLanguage *);
@@ -207,6 +209,7 @@ Subtree ts_subtree_edit(Subtree, const TSInputEdit *edit, SubtreePool *);
 char *ts_subtree_string(Subtree, const TSLanguage *, bool include_all);
 void ts_subtree_print_dot_graph(Subtree, const TSLanguage *, FILE *);
 Subtree ts_subtree_last_external_token(Subtree);
+const ExternalScannerState *ts_subtree_external_scanner_state(Subtree self);
 bool ts_subtree_external_scanner_state_eq(Subtree, Subtree);
 
 #define SUBTREE_GET(self, name) (self.data.is_inline ? self.data.name : self.ptr->name)
@@ -288,6 +291,12 @@ static inline uint32_t ts_subtree_repeat_depth(Subtree self) {
   return self.data.is_inline ? 0 : self.ptr->repeat_depth;
 }
 
+static inline uint32_t ts_subtree_is_repetition(Subtree self) {
+  return self.data.is_inline
+    ? 0
+    : !self.ptr->named && !self.ptr->visible && self.ptr->child_count != 0;
+}
+
 static inline uint32_t ts_subtree_node_count(Subtree self) {
   return (self.data.is_inline || self.ptr->child_count == 0) ? 1 : self.ptr->node_count;
 }
@@ -330,6 +339,10 @@ static inline bool ts_subtree_fragile_right(Subtree self) {
 
 static inline bool ts_subtree_has_external_tokens(Subtree self) {
   return self.data.is_inline ? false : self.ptr->has_external_tokens;
+}
+
+static inline bool ts_subtree_has_external_scanner_state_change(Subtree self) {
+  return self.data.is_inline ? false : self.ptr->has_external_scanner_state_change;
 }
 
 static inline bool ts_subtree_depends_on_column(Subtree self) {

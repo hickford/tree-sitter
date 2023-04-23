@@ -8,12 +8,12 @@ use std::{env, fs};
 
 /// Holds the contents of tree-sitter's configuration file.
 ///
-/// The file typically lives at `~/.config/tree-sitter/config.json`, but see the [`load`][] method
-/// for the full details on where it might be located.
+/// The file typically lives at `~/.config/tree-sitter/config.json`, but see the [`Config::load`][]
+/// method for the full details on where it might be located.
 ///
 /// This type holds the generic JSON content of the configuration file.  Individual tree-sitter
-/// components will use the [`get`][] method to parse that JSON to extract configuration fields
-/// that are specific to that component.
+/// components will use the [`Config::get`][] method to parse that JSON to extract configuration
+/// fields that are specific to that component.
 #[derive(Debug)]
 pub struct Config {
     pub location: PathBuf,
@@ -25,6 +25,9 @@ impl Config {
         if let Ok(path) = env::var("TREE_SITTER_DIR") {
             let mut path = PathBuf::from(path);
             path.push("config.json");
+            if !path.exists() {
+                return Ok(None);
+            }
             if path.is_file() {
                 return Ok(Some(path));
             }
@@ -37,7 +40,8 @@ impl Config {
 
         let legacy_path = dirs::home_dir()
             .ok_or(anyhow!("Cannot determine home directory"))?
-            .join(".tree-sitter/config.json");
+            .join(".tree-sitter")
+            .join("config.json");
         if legacy_path.is_file() {
             return Ok(Some(legacy_path));
         }
@@ -48,7 +52,8 @@ impl Config {
     fn xdg_config_file() -> Result<PathBuf> {
         let xdg_path = dirs::config_dir()
             .ok_or(anyhow!("Cannot determine config directory"))?
-            .join("tree-sitter/config.json");
+            .join("tree-sitter")
+            .join("config.json");
         Ok(xdg_path)
     }
 
@@ -72,13 +77,20 @@ impl Config {
         Ok(Config { location, config })
     }
 
-    /// Creates an empty initial configuration file.  You can then use the [`add`][] method to add
-    /// the component-specific configuration types for any components that want to add content to
-    /// the default file, and then use [`save`][] to write the configuration to disk.
+    /// Creates an empty initial configuration file.  You can then use the [`Config::add`][] method
+    /// to add the component-specific configuration types for any components that want to add
+    /// content to the default file, and then use [`Config::save`][] to write the configuration to
+    /// disk.
     ///
     /// (Note that this is typically only done by the `tree-sitter init-config` command.)
     pub fn initial() -> Result<Config> {
-        let location = Self::xdg_config_file()?;
+        let location = if let Ok(path) = env::var("TREE_SITTER_DIR") {
+            let mut path = PathBuf::from(path);
+            path.push("config.json");
+            path
+        } else {
+            Self::xdg_config_file()?
+        };
         let config = serde_json::json!({});
         Ok(Config { location, config })
     }

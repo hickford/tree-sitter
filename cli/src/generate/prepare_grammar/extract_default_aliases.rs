@@ -62,6 +62,18 @@ pub(super) fn extract_default_aliases(
         }
     }
 
+    for symbol in syntax_grammar.extra_symbols.iter() {
+        let mut status = match symbol.kind {
+            SymbolType::External => &mut external_status_list[symbol.index],
+            SymbolType::NonTerminal => &mut non_terminal_status_list[symbol.index],
+            SymbolType::Terminal => &mut terminal_status_list[symbol.index],
+            SymbolType::End | SymbolType::EndOfNonTerminalExtra => {
+                panic!("Unexpected end token")
+            }
+        };
+        status.appears_unaliased = true;
+    }
+
     let symbols_with_statuses = (terminal_status_list
         .iter_mut()
         .enumerate()
@@ -197,13 +209,7 @@ mod tests {
                     }],
                 },
             ],
-            extra_symbols: vec![],
-            external_tokens: vec![],
-            supertype_symbols: vec![],
-            expected_conflicts: vec![],
-            variables_to_inline: vec![],
-            precedence_orderings: vec![],
-            word_token: None,
+            ..Default::default()
         };
 
         let lexical_grammar = LexicalGrammar {
